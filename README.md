@@ -26,7 +26,7 @@ It is research software and is not intended for clinical diagnosis, treatment de
 
 ## Author
 
-**Zonghan Gan**
+**Zonghan Gan甘宗瀚**
 
 ---
 
