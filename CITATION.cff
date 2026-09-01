@@ -1,9 +1,0 @@
-cff-version: 1.2.0
-message: "If you use this software in research, please cite the associated publication and this software record when complete citation details become available."
-title: "CurviWound Profiler"
-version: "1.0"
-type: software
-authors:
-  - family-names: "Gan"
-    given-names: "Zonghan"
-abstract: "Research software for quantitative analysis of experimental animal wound images, including image renaming, surface-related geometric correction, wound-boundary fitting, area measurement, and ROI review."
