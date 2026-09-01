@@ -1,4 +1,4 @@
-# Form implementation generated from reading ui file 'mainWindow.ui'
+# Form implementation generated from reading ui file 'd:\project\calibration\mouseUndistortion\pyqt\mainWindow.ui'
 #
 # Created by: PyQt6 UI code generator 6.4.2
 #
@@ -206,16 +206,16 @@ class Ui_MainWindow(object):
     def retranslateUi(self, MainWindow):
         _translate = QtCore.QCoreApplication.translate
         MainWindow.setWindowTitle(_translate("MainWindow", "MainWindow"))
-        self.label_3.setText(_translate("MainWindow", "图像"))
-        self.m_processImgBtn.setText(_translate("MainWindow", "图像处理"))
-        self.m_getGridCornersBtn.setText(_translate("MainWindow", "获取网格点"))
-        self.m_deleteGridCornersBtn.setText(_translate("MainWindow", "删除网格点"))
-        self.m_manualGridIndexBtn.setText(_translate("MainWindow", "手动编号"))
-        self.m_finishGridCornersBtn.setText(_translate("MainWindow", "完成"))
-        self.m_saveCurrentImgBtn.setText(_translate("MainWindow", "保存当前"))
-        self.m_saveImgBtn.setText(_translate("MainWindow", "保存"))
+        self.label_3.setText(_translate("MainWindow", "Image-"))
+        self.m_processImgBtn.setText(_translate("MainWindow", "auto-track-grid"))
+        self.m_getGridCornersBtn.setText(_translate("MainWindow", "add-grid"))
+        self.m_deleteGridCornersBtn.setText(_translate("MainWindow", "delete"))
+        self.m_manualGridIndexBtn.setText(_translate("MainWindow", "manual-coordinate"))
+        self.m_finishGridCornersBtn.setText(_translate("MainWindow", "complete-"))
+        self.m_saveCurrentImgBtn.setText(_translate("MainWindow", "save-current"))
+        self.m_saveImgBtn.setText(_translate("MainWindow", "save"))
         self.label.setText(_translate("MainWindow", "  H "))
         self.label_2.setText(_translate("MainWindow", " S "))
         self.label_4.setText(_translate("MainWindow", " V "))
-        self.menu.setTitle(_translate("MainWindow", "文件"))
-        self.m_openFolderAction.setText(_translate("MainWindow", "打开"))
+        self.menu.setTitle(_translate("MainWindow", "File-"))
+        self.m_openFolderAction.setText(_translate("MainWindow", "Open-"))

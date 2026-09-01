@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QApplication, QMainWindow, QFileDialog, QTreeWidgetItem
 from PyQt6.QtCore import QDir, Qt, QEvent, QPoint
-from PyQt6.QtGui import QImage, QPixmap, QPainter, QTransform
+from PyQt6.QtGui import QImage, QPixmap, QPainter, QTransform, QKeySequence, QShortcut
 from generationFile.mainWindow_ui import Ui_MainWindow
 import cv2
 import sys
@@ -36,6 +36,12 @@ class MainWindow(QMainWindow):
         # 模式相关变量
         self.mode = "normal"  # normal, get_grid_points, delete_grid_points
         self.lasso_points = []  # 用于存储套索点
+        
+        # 撤销/恢复相关变量
+        self.operation_history = []  # 操作历史记录
+        self.history_index = -1  # 当前历史记录索引
+        self.max_history = 50  # 最大历史记录数量
+        
         # 初始化UI
         self.initUI()
         self.openFolder()
@@ -56,7 +62,7 @@ class MainWindow(QMainWindow):
         self.ui.m_dstImgLabel.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         # 设置自动对比度复选框
-        self.ui.m_autoContrastCheck.setText("自动对比度增强")
+        self.ui.m_autoContrastCheck.setText("enhance contrast")
         self.ui.m_autoContrastCheck.setChecked(True)  # 默认开启
         self.ui.m_contrastAlphaHSlider.setEnabled(False)
 
@@ -70,6 +76,8 @@ class MainWindow(QMainWindow):
         self.ui.m_finishGridCornersBtn.clicked.connect(
             self.finishGridPoints)  # 完成按钮
         self.ui.m_saveImgBtn.clicked.connect(self.saveGridPoints)
+        self.ui.m_saveCurrentImgBtn.clicked.connect(
+            self.saveCurrentImageGridPoints)
         self.ui.m_roiIndexCBox.currentIndexChanged.connect(
             self.onRoiIndexChanged)
         # 添加自动对比度复选框状态变化信号连接
@@ -82,6 +90,164 @@ class MainWindow(QMainWindow):
         # 为图像标签安装事件过滤器
         self.ui.m_srcImgLabel.installEventFilter(self)
         self.ui.m_dstImgLabel.installEventFilter(self)
+        
+        # 设置快捷键
+        self.setupShortcuts()
+        
+        # 设置焦点策略，使窗口能接收键盘事件
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def setupShortcuts(self):
+        """设置快捷键"""
+        # A键 - 获取椭圆点
+        shortcut_a = QShortcut(QKeySequence('A'), self)
+        shortcut_a.activated.connect(self.startGetGridPoints)
+        
+        # D键 - 删除椭圆点
+        shortcut_d = QShortcut(QKeySequence('D'), self)
+        shortcut_d.activated.connect(self.startDeleteGridPoints)
+        
+        # W键 - 完成操作
+        shortcut_w = QShortcut(QKeySequence('W'), self)
+        shortcut_w.activated.connect(self.finishGridPoints)
+        
+        # S键 - 保存当前图片
+        shortcut_s = QShortcut(QKeySequence('S'), self)
+        shortcut_s.activated.connect(self.saveCurrentImageGridPoints)
+        
+        # Page Up - 上一张图片
+        shortcut_pageup = QShortcut(QKeySequence(Qt.Key.Key_PageUp), self)
+        shortcut_pageup.activated.connect(self.previousImage)
+        
+        # Page Down - 下一张图片
+        shortcut_pagedown = QShortcut(QKeySequence(Qt.Key.Key_PageDown), self)
+        shortcut_pagedown.activated.connect(self.nextImage)
+        
+        # Ctrl+Z - 撤销操作
+        shortcut_undo = QShortcut(QKeySequence('Ctrl+Z'), self)
+        shortcut_undo.activated.connect(self.undoOperation)
+        
+        # Ctrl+Y - 恢复操作
+        shortcut_redo = QShortcut(QKeySequence('Ctrl+Y'), self)
+        shortcut_redo.activated.connect(self.redoOperation)
+
+    def previousImage(self):
+        """切换到上一张图片"""
+        current_item = self.ui.m_imgTreeWidget.currentItem()
+        if not current_item or not current_item.parent() or current_item.parent().text(0) != "src":
+            return
+            
+        # 获取src文件夹节点
+        src_node = current_item.parent()
+        current_index = src_node.indexOfChild(current_item)
+        
+        if current_index > 0:
+            # 选择上一张图片
+            prev_item = src_node.child(current_index - 1)
+            self.ui.m_imgTreeWidget.setCurrentItem(prev_item)
+            self.onTreeItemClicked(prev_item, 0)
+
+    def nextImage(self):
+        """切换到下一张图片"""
+        current_item = self.ui.m_imgTreeWidget.currentItem()
+        if not current_item or not current_item.parent() or current_item.parent().text(0) != "src":
+            return
+            
+        # 获取src文件夹节点
+        src_node = current_item.parent()
+        current_index = src_node.indexOfChild(current_item)
+        
+        if current_index < src_node.childCount() - 1:
+            # 选择下一张图片
+            next_item = src_node.child(current_index + 1)
+            self.ui.m_imgTreeWidget.setCurrentItem(next_item)
+            self.onTreeItemClicked(next_item, 0)
+
+    def saveOperationState(self, operation_type, img_name, roi_index, points_before, points_after):
+        """保存操作状态到历史记录"""
+        # 如果当前不在历史记录的末尾，删除后面的记录
+        if self.history_index < len(self.operation_history) - 1:
+            self.operation_history = self.operation_history[:self.history_index + 1]
+        
+        # 将QPoint对象转换为可序列化的格式
+        def convert_points(points):
+            if not points:
+                return []
+            return [QPoint(p.x(), p.y()) for p in points]
+        
+        # 添加新的操作记录
+        operation = {
+            'type': operation_type,  # 'add' 或 'delete'
+            'img_name': img_name,
+            'roi_index': roi_index,
+            'points_before': convert_points(points_before),
+            'points_after': convert_points(points_after)
+        }
+        
+        self.operation_history.append(operation)
+        self.history_index += 1
+        
+        # 限制历史记录数量
+        if len(self.operation_history) > self.max_history:
+            self.operation_history.pop(0)
+            self.history_index -= 1
+
+    def undoOperation(self):
+        """撤销上一步操作"""
+        if self.history_index < 0:
+            self.statusBar().showMessage("没有可撤销的操作")
+            return
+        
+        operation = self.operation_history[self.history_index]
+        img_name = operation['img_name']
+        roi_index = operation['roi_index']
+        
+        # 恢复到操作前的状态
+        if img_name not in self.roiPts:
+            self.roiPts[img_name] = {}
+        
+        if operation['points_before']:
+            self.roiPts[img_name][roi_index] = [QPoint(p.x(), p.y()) for p in operation['points_before']]
+        else:
+            if roi_index in self.roiPts[img_name]:
+                del self.roiPts[img_name][roi_index]
+        
+        self.history_index -= 1
+        
+        # 更新显示
+        self.updateSrcImage()
+        self.updateDstImage()
+        
+        operation_type = "添加" if operation['type'] == 'add' else "删除"
+        self.statusBar().showMessage(f"撤销{operation_type}椭圆点操作")
+
+    def redoOperation(self):
+        """恢复下一步操作"""
+        if self.history_index >= len(self.operation_history) - 1:
+            self.statusBar().showMessage("没有可恢复的操作")
+            return
+        
+        self.history_index += 1
+        operation = self.operation_history[self.history_index]
+        img_name = operation['img_name']
+        roi_index = operation['roi_index']
+        
+        # 恢复到操作后的状态
+        if img_name not in self.roiPts:
+            self.roiPts[img_name] = {}
+        
+        if operation['points_after']:
+            self.roiPts[img_name][roi_index] = [QPoint(p.x(), p.y()) for p in operation['points_after']]
+        else:
+            if roi_index in self.roiPts[img_name]:
+                del self.roiPts[img_name][roi_index]
+        
+        # 更新显示
+        self.updateSrcImage()
+        self.updateDstImage()
+        
+        operation_type = "添加" if operation['type'] == 'add' else "删除"
+        self.statusBar().showMessage(f"恢复{operation_type}椭圆点操作")
 
     def onTreeItemClicked(self, item, column):
         # 检查是否点击的是src文件夹下的图片项
@@ -301,6 +467,115 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(f"已保存 {saved_count} 个ROI点数据文件")
         else:
             self.statusBar().showMessage("没有ROI点数据需要保存")
+
+    # 保存当前选中图片的网格点信息
+    def saveCurrentImageGridPoints(self):
+        # 获取当前选中的图片
+        current_item = self.ui.m_imgTreeWidget.currentItem()
+        if current_item is None:
+            self.statusBar().showMessage("请先选择一张图片")
+            return
+
+        parent = current_item.parent()
+        if parent is None or parent.text(0) != "src":
+            self.statusBar().showMessage("请选择src文件夹下的图片")
+            return
+
+        img_name = current_item.text(0)
+
+        # 创建保存文件夹
+        roi_points_folder = os.path.join(self.m_folderPath, 'roi_points')
+        if not os.path.exists(roi_points_folder):
+            os.makedirs(roi_points_folder)
+
+        dst_folder = os.path.join(self.m_folderPath, 'dst')
+        if not os.path.exists(dst_folder):
+            os.makedirs(dst_folder)
+
+        # 检查当前图片是否有ROI点数据
+        if img_name not in self.roiPts:
+            self.statusBar().showMessage(f"当前图片 {img_name} 没有ROI点数据")
+            return
+
+        # 保存当前图片的所有ROI索引数据
+        saved_count = 0
+        saved_roi_images = 0
+
+        # 用于收集ROI面积数据
+        roi_areas_data = []
+
+        # 生成带椭圆的目标图像
+        display_img = self.dstImgs.get(img_name).copy()
+        if display_img is not None:
+            if self.ui.m_autoContrastCheck.isChecked():  # 自动对比度增强处理
+                if len(display_img.shape) == 3:
+                    b, g, r = cv2.split(display_img)
+                    # 创建CLAHE对象
+                    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                    # 对每个通道应用CLAHE
+                    b_clahe = clahe.apply(b)
+                    g_clahe = clahe.apply(g)
+                    r_clahe = clahe.apply(r)
+                    display_img = cv2.merge([b_clahe, g_clahe, r_clahe])
+                else:
+                    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                    display_img = clahe.apply(display_img)
+            else:
+                alpha = self.ui.m_contrastAlphaHSlider.value() / 10  # 对比度增强系数
+                beta = 0     # 亮度调整值
+                display_img = cv2.convertScaleAbs(
+                    display_img, alpha=alpha, beta=beta)
+
+            colors = [(0, 0, 255), (0, 255, 0), (255, 0, 0), (255, 0, 255)]
+            # 遍历所有ROI索引（1-4）
+            for roi_index in range(1, 5):  # ROI_1 到 ROI_4
+                if roi_index in self.roiPts[img_name]:
+                    # 保存点数据并获取物理面积
+                    area_mm2 = self.save_single_image_points(
+                        img_name, roi_points_folder, roi_index)
+                    saved_count += 1
+
+                    # 如果有足够的点可以拟合椭圆，则认为保存了ROI图像
+                    if len(self.roiPts[img_name][roi_index]) >= 5:
+                        saved_roi_images += 1
+                        points = self.roiPts[img_name][roi_index]
+                        np_points = np.array(
+                            [[p.x(), p.y()] for p in points], dtype=np.float32)
+                        # 拟合椭圆
+                        ellipse = cv2.fitEllipse(np_points)
+                        cv2.ellipse(display_img, ellipse,
+                                    colors[roi_index-1], 2)
+
+                        # 如果成功计算了物理面积，添加到数据列表
+                        if area_mm2 is not None:
+                            img_name_without_ext = os.path.splitext(img_name)[
+                                0]
+                            roi_areas_data.append({
+                                'img_name': img_name_without_ext,
+                                'roi_index': roi_index,
+                                'area_mm2': area_mm2
+                            })
+
+            # 保存目标图像
+            dst_image_path = os.path.join(dst_folder, img_name)
+            cv2.imwrite(dst_image_path, display_img)
+
+        # 生成CSV文件
+        csv_info = ""
+        if roi_areas_data:
+            self.generate_roi_areas_csv(roi_areas_data)
+            csv_info = "并更新了ROI面积CSV文件"
+
+        # 更新状态栏信息
+        if saved_count > 0:
+            if saved_roi_images > 0:
+                self.statusBar().showMessage(
+                    f"已保存 {img_name} 的 {saved_count} 个ROI点数据文件和 {saved_roi_images} 个ROI图像{csv_info}")
+            else:
+                self.statusBar().showMessage(
+                    f"已保存 {img_name} 的 {saved_count} 个ROI点数据文件")
+        else:
+            self.statusBar().showMessage(f"当前图片 {img_name} 没有ROI点数据需要保存")
 
     # 生成ROI面积CSV文件
     def generate_roi_areas_csv(self, roi_areas_data):
@@ -609,8 +884,16 @@ class MainWindow(QMainWindow):
                         if roi_index not in self.roiPts[img_name]:
                             self.roiPts[img_name][roi_index] = []
 
+                        # 保存操作前的状态
+                        points_before = self.roiPts[img_name][roi_index].copy()
+                        
                         # 添加ROI点
                         self.roiPts[img_name][roi_index].append(original_pos)
+                        
+                        # 保存操作后的状态到历史记录
+                        points_after = self.roiPts[img_name][roi_index].copy()
+                        self.saveOperationState('add', img_name, roi_index, points_before, points_after)
+                        
                         self.statusBar().showMessage(
                             f"添加椭圆点: ({original_pos.x()}, {original_pos.y()}) 到 ROI_{roi_index}")
 
@@ -642,6 +925,9 @@ class MainWindow(QMainWindow):
 
                         # 完成套索绘制，删除套索内的点
                         if img_name in self.roiPts and roi_index in self.roiPts[img_name] and len(self.roiPts[img_name][roi_index]) > 0:
+                            # 保存操作前的状态
+                            points_before = self.roiPts[img_name][roi_index].copy()
+                            
                             # 获取标签大小和图像信息
                             label_size = self.ui.m_srcImgLabel.size()
 
@@ -660,6 +946,11 @@ class MainWindow(QMainWindow):
                             # 从后往前删除点，避免索引变化
                             for i in sorted(points_to_remove, reverse=True):
                                 del self.roiPts[img_name][roi_index][i]
+
+                            # 保存操作后的状态到历史记录
+                            if len(points_to_remove) > 0:
+                                points_after = self.roiPts[img_name][roi_index].copy()
+                                self.saveOperationState('delete', img_name, roi_index, points_before, points_after)
 
                             self.statusBar().showMessage(
                                 f"删除了 {len(points_to_remove)} 个椭圆点")
@@ -684,17 +975,17 @@ class MainWindow(QMainWindow):
                     self.updateDstImage()
                 return True
 
-            # 处理鼠标按下事件 (正常模式下的拖动)
-            elif event.type() == QEvent.Type.MouseButtonPress and self.mode == "normal":
-                if event.button() == Qt.MouseButton.LeftButton:
+            # 处理鼠标按下事件 (正常模式下的左键拖动和任何模式下的中键拖动)
+            elif event.type() == QEvent.Type.MouseButtonPress:
+                if (event.button() == Qt.MouseButton.LeftButton and self.mode == "normal") or event.button() == Qt.MouseButton.MiddleButton:
                     if obj == self.ui.m_srcImgLabel:
                         self.src_drag_start = event.position().toPoint()
                     else:
                         self.dst_drag_start = event.position().toPoint()
                     return True
 
-            # 处理鼠标移动事件 (正常模式下的拖动)
-            elif event.type() == QEvent.Type.MouseMove and self.mode == "normal":
+            # 处理鼠标移动事件 (正常模式下的左键拖动和任何模式下的中键拖动)
+            elif event.type() == QEvent.Type.MouseMove:
                 if obj == self.ui.m_srcImgLabel and self.src_drag_start is not None:
                     # 计算拖动偏移量
                     delta = event.position().toPoint() - self.src_drag_start
@@ -710,9 +1001,9 @@ class MainWindow(QMainWindow):
                     self.updateDstImage()
                     return True
 
-            # 处理鼠标释放事件 (正常模式下的拖动)
-            elif event.type() == QEvent.Type.MouseButtonRelease and self.mode == "normal":
-                if event.button() == Qt.MouseButton.LeftButton:
+            # 处理鼠标释放事件 (正常模式下的左键拖动和任何模式下的中键拖动)
+            elif event.type() == QEvent.Type.MouseButtonRelease:
+                if (event.button() == Qt.MouseButton.LeftButton and self.mode == "normal") or event.button() == Qt.MouseButton.MiddleButton:
                     if obj == self.ui.m_srcImgLabel:
                         self.src_drag_start = None
                     else:
